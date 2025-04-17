@@ -1,0 +1,191 @@
+import express, { Request, Response } from 'express';
+import dotenv from 'dotenv';
+import {
+    processLLMResponseAndInsert,
+    processTimeTableData,
+    getTimeTableData,
+    getStudentAttendance,
+    markAttendance,
+    processRawTimeTableData,
+    getRawTimeTableData
+} from './services/finale2'; // Assuming your utility functions are in utils.ts
+import fs from 'fs';
+import xlsx from 'xlsx';
+import { DatabaseSingleton } from './models/db';
+
+dotenv.config();
+
+const router = express.Router();
+
+// Assuming DatabaseSingleton and its getInstance() and getDatabase() methods are available
+
+// Middleware to get db instance from the request body
+const getDbFromRequestBody = async (req: Request, res: Response, next: () => void) => {
+    const dbName = req.body.dbName;
+    if (!dbName || typeof dbName !== 'string') {
+        return res.status(400).json({ error: 'dbName is required in the request body' });
+    }
+    try {
+        const dbManager = DatabaseSingleton.getInstance();
+        req.db = await dbManager.getDatabase(dbName);
+        next();
+    } catch (error: any) {
+        console.error('Error getting database instance:', error);
+        return res.status(500).json({ error: 'Failed to get database instance' });
+    }
+};
+
+// Extend the Request interface to include the db property
+declare global {
+    namespace Express {
+        interface Request {
+            db: any; // Or your specific Db type from mongodb
+        }
+    }
+}
+
+// Test route to process a mock LLM response with dbName from body
+router.post('/test/process-llm', getDbFromRequestBody, async (req: Request, res: Response) => {
+    try {
+        const mockLLMResponse = `
+            <MongoArtifact>
+                <MongoCollection type="CommonCollection" name="TestSchool">
+                    <MongoData for="TestSchool">[
+                        {"name": "Test School 1", "code": "TS1", "createdAt": <TIMESTAMP>, "updatedAt": <TIMESTAMP>}
+                    ]</MongoData>
+                </MongoCollection>
+            </MongoArtifact>
+            <MongoArtifact>
+                <MongoCollection type="uniqueCollection" name="TestTeacher" uniqueFields="email">
+                    <MongoData for="TestTeacher">[
+                        {"name": "Test Teacher 1", "email": "test1@example.com", "createdAt": <TIMESTAMP>, "updatedAt": <TIMESTAMP>}
+                    ]</MongoData>
+                </MongoCollection>
+            </MongoArtifact>
+            <MongoInfo type="done">"Processed test data in ${req.body.dbName}."</MongoInfo>
+        `;
+        const result = await processLLMResponseAndInsert(mockLLMResponse, req.db);
+        res.json({ message: `LLM response processed in database: ${req.body.dbName}`, result });
+    } catch (error: any) {
+        console.error(`Error processing test LLM response in database ${req.body.dbName}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test route to trigger timetable data processing from a mock file with dbName from body
+router.post('/test/process-timetable', getDbFromRequestBody, async (req: Request, res: Response) => {
+    try {
+        const mockXLSXPath = './mock_timetable.xlsx'; // Ensure this file exists with some test data
+        const universityId = 'TEST_UNI_123';
+
+        // Create a mock Excel file for testing if it doesn't exist
+        if (!fs.existsSync(mockXLSXPath)) {
+            const wb = xlsx.utils.book_new();
+            const ws_data = [
+                ["Day", "Period", "StartTime", "EndTime", "Subject", "Teacher Email", "Classroom"],
+                ["Monday", "1", "09:00", "10:00", "Math", "teacher1@example.com", "Room 101"],
+                ["Tuesday", "2", "10:00", "11:00", "Science", "teacher2@example.com", "Room 102"],
+            ];
+            const ws = xlsx.utils.aoa_to_sheet(ws_data);
+            xlsx.utils.book_append_sheet(wb, ws, "Sheet1");
+            xlsx.writeFile(wb, mockXLSXPath);
+            console.log(`[TEST] Mock Excel file created at ${mockXLSXPath}`);
+        }
+
+        const result = await processTimeTableData(mockXLSXPath, req.db, universityId);
+        res.json({ message: `Timetable processing initiated in database: ${req.body.dbName}`, result });
+    } catch (error: any) {
+        console.error(`Error processing test timetable in database ${req.body.dbName}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test route to get all timetable data with dbName from body
+router.get('/test/timetable', getDbFromRequestBody, async (req: Request, res: Response) => {
+    try {
+        const timetableData = await getTimeTableData(req.db);
+        res.json(timetableData);
+    } catch (error: any) {
+        console.error(`Error getting timetable data from database ${req.body.dbName}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test route to get student attendance data (replace with a valid student ID) with dbName from body
+router.get('/test/attendance/:studentId', getDbFromRequestBody, async (req: Request, res: Response) => {
+    try {
+        const { studentId } = req.params;
+        const academicYear = '2024-2025';
+        const semester = 'Fall';
+        const attendanceData = await getStudentAttendance(req.db, studentId, academicYear, semester);
+        res.json(attendanceData);
+    } catch (error: any) {
+        console.error(`Error getting student attendance from database ${req.body.dbName}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test route to mark attendance (replace with valid IDs) with dbName from body
+router.post('/test/mark-attendance', getDbFromRequestBody, async (req: Request, res: Response) => {
+    try {
+        const { timetableId, studentIds, date, status, markedBy } = req.body;
+        const result = await markAttendance(req.db, timetableId, studentIds, date, status, markedBy);
+        res.json({ message: `Attendance marked in database: ${req.body.dbName}`, result });
+    } catch (error: any) {
+        console.error(`Error marking attendance in database ${req.body.dbName}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test route to process mock raw timetable data with dbName from body
+router.post('/test/process-raw-timetable', getDbFromRequestBody, async (req: Request, res: Response) => {
+    try {
+        const rawData = [
+            { day: 'Wednesday', period: '3', startTime: '11:00', endTime: '12:00', subjectName: 'History', teacherEmail: 'history@example.com', classroomName: 'Hall A', classroomBuilding: 'Arts Block' },
+            { day: 'Thursday', period: '1', startTime: '09:00', endTime: '10:00', subjectName: 'Physics', teacherEmail: 'physics@example.com', classroomName: 'Lab 1', classroomBuilding: 'Science Block' },
+        ];
+        const academicYear = '2024-2025';
+        const semester = 'Fall';
+        const specializationId = 'TEST_SPEC_456'; // Replace with a valid specialization ID
+        const result = await processRawTimeTableData(rawData, req.db, academicYear, semester, specializationId);
+        res.json({ message: `Raw timetable data processed in database: ${req.body.dbName}`, result });
+    } catch (error: any) {
+        console.error(`Error processing raw timetable data in database ${req.body.dbName}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test route to get all raw timetable data with dbName from body
+router.get('/test/raw-timetable', getDbFromRequestBody, async (req: Request, res: Response) => {
+    try {
+        const rawTimetableData = await getRawTimeTableData(req.db);
+        res.json(rawTimetableData);
+    } catch (error: any) {
+        console.error(`Error getting raw timetable data from database ${req.body.dbName}:`, error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+import bodyParser from 'body-parser';
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(bodyParser.json());
+app.use('/api', router); // Mount the test routes under /api/test
+
+async function startServer() {
+  try {
+    // Initialize database connection BEFORE starting the server
+    await initializeDatabase();
+
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('Server startup failed:', error);
+    process.exit(1);
+  }
+}
+startServer();

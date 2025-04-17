@@ -147,6 +147,8 @@ importers:
         specifier: ^6.2.0
         version: 6.2.3(@types/node@22.13.10)
 
+  apps/server: {}
+
   apps/student-app:
     dependencies:
       react:
